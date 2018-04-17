@@ -110,6 +110,22 @@ The tags page lists all posts as headlines."
   "HTML to put after the content of each page."
   :group 'org-static-blog)
 
+(defcustom org-static-blog-author "John Doe"
+  "Author of the blog."
+  :group 'org-static-blog)
+
+(defcustom org-static-blog-author-email "john@example.com"
+  "E-mail address of author of the blog."
+  :group 'org-static-blog)
+
+(defcustom org-static-blog-author-uri "http://example.com/~john/"
+  "URI to homepage of author of the blog."
+  :group 'org-static-blog)
+
+(defcustom org-static-blog-feed-type 'rss
+  "Type of feed to generate."
+  :group 'org-static-blog)
+
 ;;;###autoload
 (defun org-static-blog-publish ()
   "Render all blog posts, the index, archive, tags, and RSS feed.
@@ -123,7 +139,7 @@ re-rendered."
   ;; don't spam too many deprecation warnings:
   (let ((org-static-blog-enable-deprecation-warning nil))
     (org-static-blog-assemble-index)
-    (org-static-blog-assemble-rss)
+    (org-static-blog-assemble-rss org-static-blog-feed-type)
     (org-static-blog-assemble-archive)
     (if org-static-blog-enable-tags
         (org-static-blog-assemble-tags))))
@@ -369,7 +385,40 @@ Modify this function if you want to change a posts footline."
       (setq taglist-content (concat taglist-content "</div>")))
     taglist-content))
 
-(defun org-static-blog-assemble-rss ()
+(defun insert-rss ()
+  (insert "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+          "<rss version=\"2.0\">\n"
+          "<channel>\n"
+          "<title>" org-static-blog-publish-title "</title>\n"
+          "<description>" org-static-blog-publish-title "</description>\n"
+          "<link>" org-static-blog-publish-url "</link>\n"
+          "<lastBuildDate>" (format-time-string "%a, %d %b %Y %H:%M:%S %z" (current-time)) "</lastBuildDate>\n")
+  (dolist (item (sort rss-items (lambda (x y) (time-less-p (car y) (car x)))))
+    (insert (cdr item)))
+  (insert "</channel>\n"
+          "</rss>\n"))
+
+(defun insert-atom ()
+  (insert "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+          "<feed xmlns=\"http://www.w3.org/2005/Atom\">\n"
+          "<title>" org-static-blog-publish-title "</title>\n"
+          "<link href=\"" org-static-blog-publish-url "\"/>\n"
+          "<link rel=\"alternate\" type=\"text/html\" href=\"" org-static-blog-publish-url "\"/>\n"          
+          "<link href=\"" org-static-blog-publish-url org-static-blog-rss-file "\" rel=\"self\" />\n"          
+          "<id>" org-static-blog-publish-url "</id>\n"
+          "<updated>" (format-time-string "%Y-%m-%dT%H:%M:%S%:z" (current-time)) "</updated>\n"
+          "<author>\n"
+          "<name>" org-static-blog-author "</name>\n"
+          "<email>" org-static-blog-author-email "</email>\n"
+          "<uri>" org-static-blog-author-uri "</uri>\n"          
+          "</author>\n"
+          )
+  
+  (dolist (item (sort rss-items (lambda (x y) (time-less-p (car y) (car x)))))
+    (insert (cdr item)))
+  (insert "</feed>\n"))
+
+(defun org-static-blog-assemble-rss (format)
   "Assemble the blog RSS feed.
 The RSS-feed is an XML file that contains every blog post in a
 machine-readable format."
@@ -377,49 +426,77 @@ machine-readable format."
         (rss-items nil))
     (dolist (post-filename (org-static-blog-get-post-filenames))
       (let ((rss-date (org-static-blog-get-date post-filename))
-            (rss-text (org-static-blog-get-rss-item post-filename)))
+            (rss-text (org-static-blog-get-rss-item format post-filename)))
         (add-to-list 'rss-items (cons rss-date rss-text))))
     (org-static-blog-with-find-file
      rss-filename
      (erase-buffer)
-     (insert "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-             "<rss version=\"2.0\">\n"
-             "<channel>\n"
-             "<title>" org-static-blog-publish-title "</title>\n"
-             "<description>" org-static-blog-publish-title "</description>\n"
-             "<link>" org-static-blog-publish-url "</link>\n"
-             "<lastBuildDate>" (format-time-string "%a, %d %b %Y %H:%M:%S %z" (current-time)) "</lastBuildDate>\n")
-     (dolist (item (sort rss-items (lambda (x y) (time-less-p (car y) (car x)))))
-       (insert (cdr item)))
-     (insert "</channel>\n"
-             "</rss>\n"))))
+     (cond
+      ((eq format 'rss)
+       (insert-rss))
+      ((eq format 'atom)
+       (insert-atom))))))
 
-(defun org-static-blog-get-rss-item (post-filename)
+(defun org-static-blog-get-rss-item (format post-filename)
   "Assemble RSS item from post-filename.
 The HTML content is taken from the rendered HTML post."
-  (concat
-   "<item>\n"
-   "  <title>" (org-static-blog-get-title post-filename) "</title>\n"
-   "  <description><![CDATA["
-   (org-static-blog-get-body post-filename t) ; exclude headline!
-   "]]></description>\n"
-   (let ((categories ""))
-     (when (and (org-static-blog-get-tags post-filename) org-static-blog-enable-tags)
-       (dolist (tag (org-static-blog-get-tags post-filename))
-         (setq categories (concat categories
-                                  "  <category>" tag "</category>\n"))))
-     categories)
-   "  <link>"
-   (concat org-static-blog-publish-url
-           (file-name-nondirectory
-            (org-static-blog-matching-publish-filename
-             post-filename)))
-   "</link>\n"
-   "  <pubDate>"
-   (format-time-string "%a, %d %b %Y %H:%M:%S %z" (org-static-blog-get-date post-filename))
-   "</pubDate>\n"
-   "</item>\n"))
+  (cond
+   ((eq format 'rss)
+    (concat
+     "<item>\n"
+     "  <title>" (org-static-blog-get-title post-filename) "</title>\n"
+     "  <description><![CDATA["
+     (org-static-blog-get-body post-filename t) ; exclude headline!
+     "]]></description>\n"
+     (let ((categories ""))
+       (when (and (org-static-blog-get-tags post-filename) org-static-blog-enable-tags)
+         (dolist (tag (org-static-blog-get-tags post-filename))
+           (setq categories (concat categories
+                                    "  <category>" tag "</category>\n"))))
+       categories)
+     "  <link>"
+     (concat org-static-blog-publish-url
+             (file-name-nondirectory
+              (org-static-blog-matching-publish-filename
+               post-filename)))
+     "</link>\n"
+     "  <pubDate>"
+     (format-time-string "%a, %d %b %Y %H:%M:%S %z" (org-static-blog-get-date post-filename))
+     "</pubDate>\n"
+     "</item>\n"))
 
+   ((eq format 'atom)
+    (concat
+     "<entry>\n"
+     "  <title>" (org-static-blog-get-title post-filename) "</title>\n"
+     "  <content type=\"html\"><![CDATA["
+     (org-static-blog-get-body post-filename t) ; exclude headline!
+     "]]></content>\n"
+     (let ((categories ""))
+       (when (and (org-static-blog-get-tags post-filename) org-static-blog-enable-tags)
+         (dolist (tag (org-static-blog-get-tags post-filename))
+           (setq categories (concat categories
+                                    "  <category term=\"" tag "\"/>\n"))))
+       categories)
+     "  <link rel=\"alternate\" type=\"text/html\" href=\""
+     (concat org-static-blog-publish-url
+             (file-name-nondirectory
+              (org-static-blog-matching-publish-filename
+               post-filename)))
+     "\"/>\n"
+     "<id>"
+     (concat org-static-blog-publish-url
+             (file-name-nondirectory
+              (org-static-blog-matching-publish-filename
+               post-filename)))
+     "</id>\n"
+
+     "  <updated>"
+     (format-time-string "%Y-%m-%dT%H:%M:%S%:z" (org-static-blog-get-date post-filename))
+     "</updated>\n"
+     "</entry>\n"))    
+   ))
+    
 (defun org-static-blog-assemble-archive ()
   "Re-render the blog archive page.
 The archive page contains single-line links and dates for every
